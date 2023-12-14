@@ -1,0 +1,38 @@
+[package]
+name = "symmetrical-octo-potato"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = {version = "*", features = ["derive"] }
+serde_json = "*"
+anyhow = "*"
+ulid = {version = "*", optional = true}
+either = "*"
+rand = {version = "*", optional = true}
+tokio = {version = "*", features = ["full", "tracing"]}
+tracing-subscriber = "*"
+tracing = "*"
+async-trait = "*"
+broadcaster = "*"
+
+[features]
+uuid = ["ulid"]
+
+[[bin]]
+name = "echo"
+
+[[bin]]
+name = "unique_ids"
+required-features = ["uuid"]
+
+[[bin]]
+name = "broadcast"
+
+[[bin]]
+name = "grow_only_counter"
+
+[[bin]]
+name = "kafka"
