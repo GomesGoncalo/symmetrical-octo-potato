@@ -99,9 +99,9 @@ enum KafkaMessage {
 
 fn handle_message(
     input: &Message<KafkaMessage>,
-    output: &Arc<Mutex<Sender<StdOutWriter>>>,
-    state: &Arc<Mutex<InitState<KafkaState>>>,
-) -> Result<()> {
+    _output: &Arc<Mutex<Sender<StdOutWriter>>>,
+    _state: &Arc<Mutex<InitState<KafkaState>>>,
+) {
     match &input.body.msg_type {
         KafkaMessage::Send { key, msg } => {
             tracing::info!(key, msg, "Received Send");
@@ -128,7 +128,6 @@ fn handle_message(
             tracing::info!(?offsets, "Received ListCommittedOffsetsOk");
         }
     };
-    Ok(())
 }
 
 async fn init_kafka(
@@ -146,7 +145,7 @@ async fn init_kafka(
                     }
                 };
 
-                handle_message(&input, &output, &state)?;
+                handle_message(&input, &output, &state);
             }
         };
     }

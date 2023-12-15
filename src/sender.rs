@@ -11,6 +11,9 @@ pub struct Sender<W: Write> {
 }
 
 impl<W: Write> Sender<W> {
+    /// # Errors
+    ///
+    /// - failed to `send()`
     pub fn reply<T: Serialize>(&mut self, request: Message<T>, msg_type: T) -> Result<()> {
         let Some(in_reply_to) = request.body.msg_id else {
             bail!("not possible to reply");
@@ -27,12 +30,16 @@ impl<W: Write> Sender<W> {
         self.send(reply, true)
     }
 
+    /// # Errors
+    ///
+    /// - failed to serialize structure
+    /// - failed to write and/or flush
     pub fn send<T: Serialize>(&mut self, mut message: Message<T>, include_id: bool) -> Result<()> {
         if include_id {
             message.body.msg_id = Some(self.id);
         }
-        serde_json::to_writer(&mut self.writer, &message).context("Failed to reply")?;
-        self.writer.flush()?;
+        serde_json::to_writer(&mut self.writer, &message).context("Failed to serialize / write")?;
+        self.writer.flush().context("Failed to flush")?;
         self.id += 1;
         Ok(())
     }

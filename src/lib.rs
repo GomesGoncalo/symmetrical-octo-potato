@@ -45,6 +45,15 @@ enum InitMessage {
     InitOk,
 }
 
+/// # Panics
+///
+/// - if locks are poisoned
+///
+/// # Errors
+///
+/// - Did not receive Init
+/// - Channel not receiving
+/// - Error replying to Init
 pub async fn init_parser<StateImpl, W>(
     mut rx: BroadcastReceiver<Messages>,
     output: Arc<Mutex<Sender<W>>>,
@@ -85,6 +94,9 @@ impl<T: Iterator> Wrapper<T> {
 
 unsafe impl<T: Iterator> Send for Wrapper<T> {}
 
+/// # Panics
+///
+/// - if inner locks become poisoned
 pub fn init_stdin(tx: BroadcastSender<Messages>) {
     tokio::spawn(async move {
         let stdin = std::io::stdin().lock();

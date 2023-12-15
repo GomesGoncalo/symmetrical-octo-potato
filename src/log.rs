@@ -24,6 +24,7 @@ impl<T> Log<T> {
         self.counter += 1;
     }
 
+    #[must_use]
     pub fn values(&self) -> Values<String, T> {
         self.values.values()
     }

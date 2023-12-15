@@ -58,7 +58,7 @@ fn handle_msg<T, StoreImpl, W>(
                     state
                         .get_inner_mut()
                         .get_log_mut()
-                        .insert_with_key(&key, val)
+                        .insert_with_key(&key, val);
                 });
             std::mem::drop(state);
             let mut known_ctx = known_ctx.lock().unwrap();
@@ -92,7 +92,7 @@ fn handle_msg<T, StoreImpl, W>(
                     state
                         .get_inner_mut()
                         .get_log_mut()
-                        .insert_with_key(&key, val)
+                        .insert_with_key(&key, val);
                 });
             std::mem::drop(state);
             let mut known_ctx = known_ctx.lock().unwrap();
@@ -153,6 +153,9 @@ fn gossip<T, StoreImpl, W>(
     }
 }
 
+/// # Panics
+///
+/// - if locks are poisoned
 pub async fn handle<T, StoreImpl, W>(
     mut rx: BroadcastReceiver<Messages>,
     output: Arc<Mutex<Sender<W>>>,
