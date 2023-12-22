@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use symmetrical_octo_potato::message::Message;
 use symmetrical_octo_potato::sender::Sender;
 use symmetrical_octo_potato::stdout_writer::StdOutWriter;
-use symmetrical_octo_potato::{Init, Initable, Messages};
+use symmetrical_octo_potato::{wait_for_message_then, Init, Initable, Messages};
 use tokio::sync::broadcast::Receiver as BroadcastReceiver;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
@@ -75,19 +75,5 @@ async fn init_unique_ids(
     mut rx: BroadcastReceiver<Messages>,
     output: Arc<Mutex<Sender<StdOutWriter>>>,
 ) -> Result<()> {
-    while let Ok(input) = rx.recv().await {
-        match input {
-            Messages::Stdin(value) => {
-                let input: Message<UniqueIdMessage> = match serde_json::from_value(value) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        continue;
-                    }
-                };
-
-                handle_message(input, output.clone())?;
-            }
-        };
-    }
-    Ok(())
+    wait_for_message_then(&mut rx, |msg| handle_message(msg, &output)).await
 }

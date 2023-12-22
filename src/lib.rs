@@ -18,7 +18,7 @@ use message::Message;
 use sender::Sender;
 use serde_json::Value;
 
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::broadcast::Receiver as BroadcastReceiver;
 use tokio::sync::broadcast::Sender as BroadcastSender;
 
@@ -118,4 +118,34 @@ pub fn init_stdin(tx: BroadcastSender<Messages>) {
             }
         }
     });
+}
+
+pub async fn wait_for_message_then<T, F>(
+    rx: &mut BroadcastReceiver<Messages>,
+    callable: F,
+) -> Result<()>
+where
+    T: DeserializeOwned,
+    F: Fn(Message<T>) -> Result<()>,
+{
+    loop {
+        match rx.recv().await {
+            Ok(Messages::Stdin(value)) => {
+                let input: Message<T> = match serde_json::from_value(value) {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        continue;
+                    }
+                };
+
+                callable(input)?;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                break Err(tokio::sync::broadcast::error::RecvError::Closed.into());
+            }
+            Err(_) => {
+                break Ok(());
+            }
+        }
+    }
 }

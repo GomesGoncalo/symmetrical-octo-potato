@@ -11,7 +11,7 @@ use symmetrical_octo_potato::message::Message;
 use symmetrical_octo_potato::sender::Sender;
 use symmetrical_octo_potato::stdout_writer::StdOutWriter;
 use symmetrical_octo_potato::traits::store::Store;
-use symmetrical_octo_potato::{gossip, Initable};
+use symmetrical_octo_potato::{gossip, wait_for_message_then, Initable};
 use symmetrical_octo_potato::{Init, Messages};
 use tokio::sync::broadcast::Receiver as BroadcastReceiver;
 use tracing_subscriber::fmt;
@@ -147,19 +147,5 @@ async fn init_broadcast(
     output: Arc<Mutex<Sender<StdOutWriter>>>,
     state: Arc<Mutex<InitState<BroadcastState>>>,
 ) -> Result<()> {
-    while let Ok(input) = rx.recv().await {
-        match input {
-            Messages::Stdin(value) => {
-                let input: Message<BroadcastMessage> = match serde_json::from_value(value) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        continue;
-                    }
-                };
-
-                handle_message(input, &output, &state)?;
-            }
-        };
-    }
-    Ok(())
+    wait_for_message_then(&mut rx, |msg| handle_message(msg, &output, &state)).await
 }

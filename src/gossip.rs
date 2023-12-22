@@ -2,8 +2,9 @@ use crate::init_state::InitState;
 use crate::message::{Body, Message};
 use crate::sender::Sender;
 use crate::traits::store::Store;
-use crate::{Initable, Messages};
+use crate::{wait_for_message_then, Initable, Messages};
 
+use anyhow::Result;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -42,7 +43,8 @@ fn handle_msg<T, StoreImpl, W>(
     output: &Arc<Mutex<Sender<W>>>,
     state: &Arc<Mutex<InitState<StoreImpl>>>,
     known_ctx: &Arc<Mutex<GossipState<T>>>,
-) where
+) -> Result<()>
+where
     W: Write,
     T: Clone + Serialize + Eq + DeserializeOwned + Debug + Send + 'static,
     StoreImpl: Store<T> + Send + Initable + 'static,
@@ -106,6 +108,7 @@ fn handle_msg<T, StoreImpl, W>(
                 .extend(seen.clone());
         }
     };
+    Ok(())
 }
 
 fn gossip<T, StoreImpl, W>(
@@ -169,24 +172,11 @@ pub async fn handle<T, StoreImpl, W>(
     let known_ctx = Arc::new(Mutex::new(GossipState::from_state(&state.lock().unwrap())));
     loop {
         tokio::select! {
-            input = rx.recv() => {
-                match input {
-                    Ok(Messages::Stdin(value)) => {
-                        let input: Message<GossipMessages<T>> = match serde_json::from_value(value) {
-                            Ok(msg) => msg,
-                            Err(_) => {
-                                continue;
-                            }
-                        };
-
-                        handle_msg(&input, &output, &state, &known_ctx);
-
-                    },
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
-                    _ => { continue; }
-                };
+            result = wait_for_message_then(&mut rx, |msg| handle_msg(&msg, &output, &state, &known_ctx)) => {
+                match result {
+                    Ok(()) => {continue;},
+                    Err(_) => {break;}
+                }
             }
             () = tokio::time::sleep(gossip_periodicity) => {
                 gossip(&output, &state, &known_ctx);

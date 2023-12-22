@@ -7,6 +7,7 @@ use std::fmt::Debug;
 use symmetrical_octo_potato::message::Message;
 use symmetrical_octo_potato::sender::Sender;
 use symmetrical_octo_potato::stdout_writer::StdOutWriter;
+use symmetrical_octo_potato::wait_for_message_then;
 use symmetrical_octo_potato::Init;
 use symmetrical_octo_potato::Initable;
 use symmetrical_octo_potato::Messages;
@@ -75,19 +76,5 @@ async fn init_echo(
     mut rx: BroadcastReceiver<Messages>,
     output: Arc<Mutex<Sender<StdOutWriter>>>,
 ) -> Result<()> {
-    while let Ok(input) = rx.recv().await {
-        match input {
-            Messages::Stdin(value) => {
-                let input: Message<EchoMessage> = match serde_json::from_value(value) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        continue;
-                    }
-                };
-
-                handle_message(&input, &output)?;
-            }
-        };
-    }
-    Ok(())
+    wait_for_message_then(&mut rx, |msg| handle_message(&msg, &output)).await
 }

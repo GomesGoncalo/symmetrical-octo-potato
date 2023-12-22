@@ -11,8 +11,8 @@ use symmetrical_octo_potato::message::Message;
 use symmetrical_octo_potato::sender::Sender;
 use symmetrical_octo_potato::stdout_writer::StdOutWriter;
 use symmetrical_octo_potato::traits::store::Store;
-use symmetrical_octo_potato::Messages;
 use symmetrical_octo_potato::{gossip, Initable};
+use symmetrical_octo_potato::{wait_for_message_then, Messages};
 use tokio::sync::broadcast::Receiver as BroadcastReceiver;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
@@ -101,7 +101,7 @@ fn handle_message(
     input: &Message<KafkaMessage>,
     _output: &Arc<Mutex<Sender<StdOutWriter>>>,
     _state: &Arc<Mutex<InitState<KafkaState>>>,
-) {
+) -> Result<()> {
     match &input.body.msg_type {
         KafkaMessage::Send { key, msg } => {
             tracing::info!(key, msg, "Received Send");
@@ -128,26 +128,13 @@ fn handle_message(
             tracing::info!(?offsets, "Received ListCommittedOffsetsOk");
         }
     };
+    Ok(())
 }
 
 async fn init_kafka(
-    mut channel: BroadcastReceiver<Messages>,
+    mut rx: BroadcastReceiver<Messages>,
     output: Arc<Mutex<Sender<StdOutWriter>>>,
     state: Arc<Mutex<InitState<KafkaState>>>,
 ) -> Result<()> {
-    while let Ok(input) = channel.recv().await {
-        match input {
-            Messages::Stdin(value) => {
-                let input: Message<KafkaMessage> = match serde_json::from_value(value) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        continue;
-                    }
-                };
-
-                handle_message(&input, &output, &state);
-            }
-        };
-    }
-    Ok(())
+    wait_for_message_then(&mut rx, |msg| handle_message(&msg, &output, &state)).await
 }
