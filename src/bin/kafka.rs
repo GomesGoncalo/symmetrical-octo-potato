@@ -1,42 +1,51 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
-use symmetrical_octo_potato::init_state::InitState;
-use symmetrical_octo_potato::log::Log;
-use symmetrical_octo_potato::message::Message;
-use symmetrical_octo_potato::sender::Sender;
-use symmetrical_octo_potato::stdout_writer::StdOutWriter;
-use symmetrical_octo_potato::traits::store::Store;
-use symmetrical_octo_potato::{gossip, Initable};
-use symmetrical_octo_potato::{wait_for_message_then, Messages};
-use tokio::sync::broadcast::Receiver as BroadcastReceiver;
-use tracing_subscriber::fmt;
-use tracing_subscriber::prelude::*;
+use std::{
+    collections::{HashMap, HashSet},
+    ops::{Deref, DerefMut},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use symmetrical_octo_potato::{
+    gossip,
+    init_state::{init_parser, Init, InitState, Initable},
+    log::Log,
+    message::Message,
+    sender::Sender,
+    stdout_writer::StdOutWriter,
+    traits::store::Store,
+    wait_for_message_then,
+};
+use tracing_subscriber::{fmt, prelude::*};
 
-#[derive(Clone)]
 struct KafkaState {
     operations: Log<HashMap<String, usize>>,
 }
 
 impl Store<HashMap<String, usize>> for KafkaState {
-    fn get_log(&self) -> &Log<HashMap<String, usize>> {
-        &self.operations
-    }
-
-    fn get_log_mut(&mut self) -> &mut Log<HashMap<String, usize>> {
-        &mut self.operations
+    fn new_value(&mut self, new: &HashMap<String, usize>) {
+        tracing::info!(new = ?new, "received");
     }
 }
 
 impl Initable for KafkaState {
-    fn with_init(init: symmetrical_octo_potato::Init) -> Self {
+    fn with_init(init: Init) -> Self {
         Self {
             operations: Log::with_init(init),
         }
+    }
+}
+
+impl Deref for KafkaState {
+    type Target = Log<HashMap<String, usize>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.operations
+    }
+}
+impl DerefMut for KafkaState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.operations
     }
 }
 
@@ -48,27 +57,32 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .pretty();
     tracing_subscriber::registry().with(layer).init();
-    let (tx, _) = tokio::sync::broadcast::channel(16);
+    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
     let output = Arc::new(Mutex::new(Sender::default()));
     symmetrical_octo_potato::init_stdin(tx.clone());
-    let state = symmetrical_octo_potato::init_parser::<KafkaState, StdOutWriter>(
-        tx.subscribe(),
-        output.clone(),
-    )
-    .await?;
-    loop {
-        tokio::select! {
-            () = gossip::handle(
-                tx.subscribe(),
-                output.clone(),
-                state.clone(),
-                Duration::from_millis(100)) => {}
-            Err(_) = init_kafka(tx.subscribe(), output.clone(), state.clone()) => {break Ok(())}
-        }
-    }
+    let state = init_parser::<KafkaState, StdOutWriter>(tx.subscribe(), output.clone()).await?;
+    let tx_clone = tx.clone();
+    let output_clone = output.clone();
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        gossip::handle(
+            tx_clone.subscribe(),
+            output_clone,
+            state_clone,
+            Duration::from_millis(100),
+        )
+        .await;
+    });
+
+    let _ = wait_for_message_then(&mut rx, |msg| {
+        handle_message(&msg, &output, &state);
+        Ok(())
+    })
+    .await;
+    Ok(())
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum KafkaMessage {
@@ -101,7 +115,7 @@ fn handle_message(
     input: &Message<KafkaMessage>,
     _output: &Arc<Mutex<Sender<StdOutWriter>>>,
     _state: &Arc<Mutex<InitState<KafkaState>>>,
-) -> Result<()> {
+) {
     match &input.body.msg_type {
         KafkaMessage::Send { key, msg } => {
             tracing::info!(key, msg, "Received Send");
@@ -128,13 +142,4 @@ fn handle_message(
             tracing::info!(?offsets, "Received ListCommittedOffsetsOk");
         }
     };
-    Ok(())
-}
-
-async fn init_kafka(
-    mut rx: BroadcastReceiver<Messages>,
-    output: Arc<Mutex<Sender<StdOutWriter>>>,
-    state: Arc<Mutex<InitState<KafkaState>>>,
-) -> Result<()> {
-    wait_for_message_then(&mut rx, |msg| handle_message(&msg, &output, &state)).await
 }

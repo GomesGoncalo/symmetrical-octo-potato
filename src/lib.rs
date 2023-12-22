@@ -6,81 +6,12 @@ pub mod sender;
 pub mod stdout_writer;
 pub mod traits;
 
-use std::{
-    collections::HashSet,
-    io::Write,
-    sync::{Arc, Mutex},
-};
-
-use anyhow::{bail, Context, Result};
-use init_state::InitState;
+use anyhow::Result;
 use message::Message;
-use sender::Sender;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
-
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tokio::sync::broadcast::Receiver as BroadcastReceiver;
-use tokio::sync::broadcast::Sender as BroadcastSender;
-
-#[derive(Clone, Debug)]
-pub enum Messages {
-    Stdin(Value),
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct Init {
-    pub node_id: String,
-    pub node_ids: HashSet<String>,
-}
-
-pub trait Initable {
-    fn with_init(init: Init) -> Self;
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
-enum InitMessage {
-    Init(Init),
-    InitOk,
-}
-
-/// # Panics
-///
-/// - if locks are poisoned
-///
-/// # Errors
-///
-/// - Did not receive Init
-/// - Channel not receiving
-/// - Error replying to Init
-pub async fn init_parser<StateImpl, W>(
-    mut rx: BroadcastReceiver<Messages>,
-    output: Arc<Mutex<Sender<W>>>,
-) -> Result<Arc<Mutex<InitState<StateImpl>>>>
-where
-    W: Write,
-    StateImpl: Initable + Send + 'static,
-{
-    let Messages::Stdin(value) = rx.recv().await.context("Error receiving")?;
-    let input =
-        serde_json::from_value::<Message<InitMessage>>(value).context("Parsing init message")?;
-
-    let InitMessage::Init(ref init) = input.body.msg_type else {
-        bail!("Received a message that does not match Init (InitOk?)")
-    };
-
-    output
-        .lock()
-        .unwrap()
-        .reply(input.clone(), InitMessage::InitOk)
-        .context("Confirm init message")?;
-
-    tracing::info!(init = ?init, "Got init message");
-    Ok(Arc::new(Mutex::new(InitState::<StateImpl>::from_init(
-        init.clone(),
-    ))))
-}
+use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast::{error::RecvError, Receiver, Sender};
 
 struct Wrapper<T: Iterator> {
     input: T,
@@ -97,8 +28,8 @@ unsafe impl<T: Iterator> Send for Wrapper<T> {}
 /// # Panics
 ///
 /// - if inner locks become poisoned
-pub fn init_stdin(tx: BroadcastSender<Messages>) {
-    tokio::spawn(async move {
+pub fn init_stdin(tx: Sender<Value>) {
+    tokio::task::spawn_blocking(move || {
         let stdin = std::io::stdin().lock();
         let inputs = Arc::new(Mutex::new(Wrapper {
             input: serde_json::Deserializer::from_reader(stdin).into_iter::<Value>(),
@@ -113,24 +44,24 @@ pub fn init_stdin(tx: BroadcastSender<Messages>) {
                 _ => continue,
             };
 
-            if tx.send(Messages::Stdin(input)).is_err() {
+            if tx.send(input).is_err() {
                 break;
             }
         }
     });
 }
 
-pub async fn wait_for_message_then<T, F>(
-    rx: &mut BroadcastReceiver<Messages>,
-    callable: F,
-) -> Result<()>
+/// # Errors
+///
+/// - When stream is closed
+pub async fn wait_for_message_then<T, F>(rx: &mut Receiver<Value>, callable: F) -> Result<()>
 where
     T: DeserializeOwned,
     F: Fn(Message<T>) -> Result<()>,
 {
     loop {
         match rx.recv().await {
-            Ok(Messages::Stdin(value)) => {
+            Ok(value) => {
                 let input: Message<T> = match serde_json::from_value(value) {
                     Ok(msg) => msg,
                     Err(_) => {
@@ -140,12 +71,10 @@ where
 
                 callable(input)?;
             }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                break Err(tokio::sync::broadcast::error::RecvError::Closed.into());
+            Err(RecvError::Closed) => {
+                break Err(RecvError::Closed.into());
             }
-            Err(_) => {
-                break Ok(());
-            }
+            Err(_) => continue,
         }
     }
 }

@@ -1,41 +1,50 @@
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
-use symmetrical_octo_potato::init_state::InitState;
-use symmetrical_octo_potato::log::Log;
-use symmetrical_octo_potato::message::Message;
-use symmetrical_octo_potato::sender::Sender;
-use symmetrical_octo_potato::stdout_writer::StdOutWriter;
-use symmetrical_octo_potato::traits::store::Store;
-use symmetrical_octo_potato::{gossip, Initable};
-use symmetrical_octo_potato::{wait_for_message_then, Messages};
-use tokio::sync::broadcast::Receiver as BroadcastReceiver;
-use tracing_subscriber::fmt;
-use tracing_subscriber::prelude::*;
+use std::{
+    ops::{Deref, DerefMut},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use symmetrical_octo_potato::{
+    gossip,
+    init_state::{init_parser, Init, InitState, Initable},
+    log::Log,
+    message::Message,
+    sender::Sender,
+    stdout_writer::StdOutWriter,
+    traits::store::Store,
+    wait_for_message_then,
+};
+use tracing_subscriber::{fmt, prelude::*};
 
-#[derive(Clone)]
 struct GrowOnlyState {
     operations: Log<usize>,
 }
 
 impl Store<usize> for GrowOnlyState {
-    fn get_log(&self) -> &Log<usize> {
-        &self.operations
-    }
-
-    fn get_log_mut(&mut self) -> &mut Log<usize> {
-        &mut self.operations
+    fn new_value(&mut self, new: &usize) {
+        tracing::info!(new = %new, "received");
     }
 }
 
 impl Initable for GrowOnlyState {
-    fn with_init(init: symmetrical_octo_potato::Init) -> Self {
+    fn with_init(init: Init) -> Self {
         Self {
             operations: Log::with_init(init),
         }
+    }
+}
+
+impl Deref for GrowOnlyState {
+    type Target = Log<usize>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.operations
+    }
+}
+impl DerefMut for GrowOnlyState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.operations
     }
 }
 
@@ -47,27 +56,29 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .pretty();
     tracing_subscriber::registry().with(layer).init();
-    let (tx, _) = tokio::sync::broadcast::channel(16);
+    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
     let output = Arc::new(Mutex::new(Sender::default()));
     symmetrical_octo_potato::init_stdin(tx.clone());
-    let state = symmetrical_octo_potato::init_parser::<GrowOnlyState, StdOutWriter>(
-        tx.subscribe(),
-        output.clone(),
-    )
-    .await?;
-    loop {
-        tokio::select! {
-            () = gossip::handle(
-                tx.subscribe(),
-                output.clone(),
-                state.clone(),
-                Duration::from_millis(100)) => {}
-            Err(_) = init_grow_only_counter(tx.subscribe(), output.clone(), state.clone()) => { break Ok(()) }
-        }
-    }
+    let state = init_parser::<GrowOnlyState, StdOutWriter>(tx.subscribe(), output.clone()).await?;
+
+    let tx_clone = tx.clone();
+    let output_clone = output.clone();
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        gossip::handle(
+            tx_clone.subscribe(),
+            output_clone,
+            state_clone,
+            Duration::from_millis(100),
+        )
+        .await;
+    });
+
+    let _ = wait_for_message_then(&mut rx, |msg| handle_message(&msg, &output, &state)).await;
+    Ok(())
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum GrowOnlyMessage {
@@ -89,24 +100,16 @@ fn handle_message(
                 .unwrap()
                 .reply(input.clone(), GrowOnlyMessage::AddOk);
 
-            state
-                .lock()
-                .unwrap()
-                .get_inner_mut()
-                .operations
-                .insert(delta);
+            let mut state = state.lock().unwrap();
+            if let Some(val) = state.operations.insert(&delta) {
+                state.new_value(val);
+            }
         }
         GrowOnlyMessage::Read { key: None } => {
             let _ = output.lock().unwrap().reply(
                 input.clone(),
                 GrowOnlyMessage::ReadOk {
-                    value: state
-                        .lock()
-                        .unwrap()
-                        .get_inner()
-                        .operations
-                        .values()
-                        .sum::<usize>(),
+                    value: state.lock().unwrap().operations.values().sum::<usize>(),
                 },
             );
         }
@@ -117,12 +120,4 @@ fn handle_message(
         }
     };
     Ok(())
-}
-
-async fn init_grow_only_counter(
-    mut rx: BroadcastReceiver<Messages>,
-    output: Arc<Mutex<Sender<StdOutWriter>>>,
-    state: Arc<Mutex<InitState<GrowOnlyState>>>,
-) -> Result<()> {
-    wait_for_message_then(&mut rx, |msg| handle_message(&msg, &output, &state)).await
 }

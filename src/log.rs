@@ -1,6 +1,5 @@
+use crate::init_state::{Init, Initable};
 use std::collections::{hash_map::Values, HashMap};
-
-use crate::{Init, Initable};
 
 #[derive(Clone, Debug)]
 pub struct Log<T> {
@@ -9,19 +8,23 @@ pub struct Log<T> {
     values: HashMap<String, T>,
 }
 
-impl<T> Log<T> {
-    pub(crate) fn contains_key(&self, key: &str) -> bool {
-        self.values.contains_key(key)
+impl<T: Clone> Log<T> {
+    #[must_use]
+    pub(crate) fn insert_with_key<'b>(&mut self, key: &str, val: &'b T) -> Option<&'b T> {
+        let inserted = !self.values.contains_key(key);
+        self.values.insert(key.to_string(), val.clone());
+        if inserted {
+            Some(val)
+        } else {
+            None
+        }
     }
 
-    pub(crate) fn insert_with_key(&mut self, key: &str, val: T) {
-        self.values.insert(key.to_string(), val);
-    }
-
-    pub fn insert(&mut self, val: T) {
-        self.values
-            .insert(format!("{}-{}", self.node, self.counter), val);
+    #[must_use]
+    pub fn insert<'b>(&mut self, val: &'b T) -> Option<&'b T> {
+        let inserted = self.insert_with_key(&format!("{}-{}", self.node, self.counter), val);
         self.counter += 1;
+        inserted
     }
 
     #[must_use]
@@ -32,7 +35,6 @@ impl<T> Log<T> {
 
 impl<T> IntoIterator for Log<T> {
     type Item = <HashMap<String, T> as IntoIterator>::Item;
-
     type IntoIter = <HashMap<String, T> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {

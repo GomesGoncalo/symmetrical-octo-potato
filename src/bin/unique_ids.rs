@@ -1,17 +1,16 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
-use symmetrical_octo_potato::message::Message;
-use symmetrical_octo_potato::sender::Sender;
-use symmetrical_octo_potato::stdout_writer::StdOutWriter;
-use symmetrical_octo_potato::{wait_for_message_then, Init, Initable, Messages};
-use tokio::sync::broadcast::Receiver as BroadcastReceiver;
-use tracing_subscriber::fmt;
-use tracing_subscriber::prelude::*;
+use symmetrical_octo_potato::{
+    init_state::{init_parser, Init, Initable},
+    message::Message,
+    sender::Sender,
+    stdout_writer::StdOutWriter,
+    wait_for_message_then,
+};
+use tracing_subscriber::{fmt, prelude::*};
 use ulid::Ulid;
 
-#[derive(Default, Clone)]
 struct UniqueIdsState {}
 
 impl Initable for UniqueIdsState {
@@ -28,19 +27,15 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .pretty();
     tracing_subscriber::registry().with(layer).init();
-    let (tx, _) = tokio::sync::broadcast::channel(16);
+    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
     let output = Arc::new(Mutex::new(Sender::default()));
     symmetrical_octo_potato::init_stdin(tx.clone());
-    let _ = symmetrical_octo_potato::init_parser::<UniqueIdsState, StdOutWriter>(
-        tx.subscribe(),
-        output.clone(),
-    )
-    .await?;
-    let _ = init_unique_ids(tx.subscribe(), output.clone()).await;
+    let _ = init_parser::<UniqueIdsState, StdOutWriter>(tx.subscribe(), output.clone()).await?;
+    let _ = wait_for_message_then(&mut rx, |msg| handle_message(msg, output.clone())).await;
     Ok(())
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum UniqueIdMessage {
@@ -69,11 +64,4 @@ fn handle_message(
         }
     };
     Ok(())
-}
-
-async fn init_unique_ids(
-    mut rx: BroadcastReceiver<Messages>,
-    output: Arc<Mutex<Sender<StdOutWriter>>>,
-) -> Result<()> {
-    wait_for_message_then(&mut rx, |msg| handle_message(msg, &output)).await
 }

@@ -1,22 +1,30 @@
-use std::io::Write;
+use std::io::{StdoutLock, Write};
 
-#[derive(Default)]
-pub struct StdOutWriter {}
+pub struct StdOutWriter<'a> {
+    stdout: StdoutLock<'a>,
+}
 
-impl Write for StdOutWriter {
+impl<'a> Default for StdOutWriter<'a> {
+    fn default() -> Self {
+        Self {
+            stdout: std::io::stdout().lock(),
+        }
+    }
+}
+
+impl<'a> Write for StdOutWriter<'a> {
     fn write_all(&mut self, buf: &[u8]) -> Result<(), std::io::Error> {
-        let mut stdout = std::io::stdout().lock();
-        stdout.write_all(buf)
+        self.stdout.write_all(buf)
     }
 
     fn write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
-        let mut stdout = std::io::stdout().lock();
-        stdout.write(buf)
+        self.stdout.write(buf)
     }
 
     fn flush(&mut self) -> Result<(), std::io::Error> {
-        let mut stdout = std::io::stdout().lock();
-        stdout.write_all(b"\n")?;
-        stdout.flush()
+        self.stdout.write_all(b"\n")?;
+        self.stdout.flush()
     }
 }
+
+unsafe impl<'a> Send for StdOutWriter<'a> {}

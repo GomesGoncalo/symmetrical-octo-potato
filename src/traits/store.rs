@@ -1,6 +1,6 @@
 use crate::log::Log;
+use std::ops::DerefMut;
 
-pub trait Store<T> {
-    fn get_log(&self) -> &Log<T>;
-    fn get_log_mut(&mut self) -> &mut Log<T>;
+pub trait Store<T>: DerefMut<Target = Log<T>> {
+    fn new_value(&mut self, _new: &T) {}
 }

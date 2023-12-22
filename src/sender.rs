@@ -1,8 +1,7 @@
-use std::io::Write;
-
 use crate::message::{Body, Message};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use std::io::Write;
 
 #[derive(Default)]
 pub struct Sender<W: Write> {
@@ -18,16 +17,18 @@ impl<W: Write> Sender<W> {
         let Some(in_reply_to) = request.body.msg_id else {
             bail!("not possible to reply");
         };
-        let reply = Message {
-            src: request.dest,
-            dest: request.src,
-            body: Body {
-                msg_id: None,
-                in_reply_to: Some(in_reply_to),
-                msg_type,
+        self.send(
+            Message {
+                src: request.dest,
+                dest: request.src,
+                body: Body {
+                    msg_id: None,
+                    in_reply_to: Some(in_reply_to),
+                    msg_type,
+                },
             },
-        };
-        self.send(reply, true)
+            true,
+        )
     }
 
     /// # Errors
